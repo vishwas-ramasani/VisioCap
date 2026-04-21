@@ -1,0 +1,187 @@
+// ---------- ULTRASONIC PINS ----------
+int trigL = 2, echoL = 3;
+int trigM = 4, echoM = 5;
+int trigR = 6, echoR = 7;
+
+// ---------- OUTPUTS ----------
+int vibL = 8;
+int vibR = 9;
+int buzzer = 10;
+
+// ---------- EXTRA SENSORS ----------
+int pirPin = 11;
+int rainPin = 12;
+
+// ---------- VARIABLES ----------
+long duration;
+int distL, distM, distR;
+bool lastMotionState = LOW; // Track previous PIR state to prevent constant beeping
+unsigned long lastRainBeepTime = 0; // Tracks the last time the rain buzzer sounded
+
+// ---------- SETTINGS ----------
+int safeDist = 60;     
+int dangerDist = 30;   
+
+// Rain mode
+int safeDistRain = 50;
+int dangerDistRain = 20;
+
+// ---------- BASIC DISTANCE ----------
+int getDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH, 30000);
+  if (duration == 0) return 200;  
+  return duration * 0.034 / 2;
+}
+
+// ---------- STABLE DISTANCE (RAIN MODE) ----------
+int getStableDistance(int trigPin, int echoPin) {
+  int sum = 0;
+  int validCount = 0;
+
+  for (int i = 0; i < 5; i++) {
+    int d = getDistance(trigPin, echoPin);
+    if (d > 0 && d < 400) {
+      sum += d;
+      validCount++;
+    }
+    delay(5);
+  }
+
+  if (validCount == 0) return 200;
+  return sum / validCount;
+}
+
+// ---------- SETUP ----------
+void setup() {
+  pinMode(trigL, OUTPUT); pinMode(echoL, INPUT);
+  pinMode(trigM, OUTPUT); pinMode(echoM, INPUT);
+  pinMode(trigR, OUTPUT); pinMode(echoR, INPUT);
+
+  pinMode(vibL, OUTPUT);
+  pinMode(vibR, OUTPUT);
+  pinMode(buzzer, OUTPUT);
+
+  pinMode(pirPin, INPUT);
+  pinMode(rainPin, INPUT_PULLUP);
+
+  Serial.begin(9600);
+
+  // ---------- PIR WARMUP ----------
+  Serial.println("Warming up PIR... please wait 10 seconds");
+  digitalWrite(buzzer, HIGH);
+  delay(200);
+  digitalWrite(buzzer, LOW);
+
+  delay(10000);
+
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(buzzer, HIGH);
+    delay(200);
+    digitalWrite(buzzer, LOW);
+    delay(200);
+  }
+
+  Serial.println("Ready!");
+}
+
+// ---------- LOOP ----------
+void loop() {
+
+  // ---------- READ SENSORS ----------
+  int motion = digitalRead(pirPin);
+  int rain = digitalRead(rainPin);
+  bool rainMode = (rain == LOW);
+
+  // ---------- DISTANCE ----------
+  if (rainMode) {
+    distL = getStableDistance(trigL, echoL);
+    delay(30); // Prevent ultrasonic interference
+    distM = getStableDistance(trigM, echoM);
+    delay(30);
+    distR = getStableDistance(trigR, echoR);
+  } else {
+    distL = getDistance(trigL, echoL);
+    delay(30); 
+    distM = getDistance(trigM, echoM);
+    delay(30);
+    distR = getDistance(trigR, echoR);
+  }
+
+  // ---------- SELECT THRESHOLDS ----------
+  int sDist = rainMode ? safeDistRain : safeDist;
+  int dDist = rainMode ? dangerDistRain : dangerDist;
+
+  // ---------- RESET OUTPUTS ----------
+  digitalWrite(vibL, LOW);
+  digitalWrite(vibR, LOW);
+  digitalWrite(buzzer, LOW);
+
+  // ---------- LEFT SENSOR ----------
+  if (distL > 0 && distL < sDist) {
+    digitalWrite(vibL, HIGH);
+  }
+
+  // ---------- RIGHT SENSOR ----------
+  if (distR > 0 && distR < sDist) {
+    digitalWrite(vibR, HIGH);
+  }
+
+  // ---------- MIDDLE SENSOR ----------
+  if (distM > 0 && distM < sDist) {
+    digitalWrite(vibL, HIGH);
+    digitalWrite(vibR, HIGH);
+  }
+
+  // ---------- BUZZER — DANGER ANY DIRECTION ----------
+  if (
+    (distL > 0 && distL < dDist) ||
+    (distM > 0 && distM < dDist) ||
+    (distR > 0 && distR < dDist)
+  ) {
+    digitalWrite(buzzer, HIGH);
+  }
+
+  // ---------- PIR — MOVING PERSON ----------
+  // Only trigger if state goes from LOW to HIGH (new motion)
+  if (motion == HIGH && lastMotionState == LOW) {
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(buzzer, HIGH);
+      delay(80);
+      digitalWrite(buzzer, LOW);
+      delay(80);
+    }
+  }
+  lastMotionState = motion; // Save the state for the next loop
+
+  // ---------- RAIN ALERT (TIMER BASED) ----------
+  if (rainMode) {
+    // If it just started raining (0) OR 30 seconds have passed since the last beep
+    if (lastRainBeepTime == 0 || millis() - lastRainBeepTime >= 30000) {
+      for (int i = 0; i < 3; i++) {
+        digitalWrite(buzzer, HIGH);
+        delay(100);
+        digitalWrite(buzzer, LOW);
+        delay(100);
+      }
+      lastRainBeepTime = millis(); // Reset the timer
+    }
+  } else {
+    // If it stops raining, reset the timer back to 0
+    lastRainBeepTime = 0; 
+  }
+
+  // ---------- DEBUG ----------
+  Serial.print("L: "); Serial.print(distL);
+  Serial.print(" M: "); Serial.print(distM);
+  Serial.print(" R: "); Serial.print(distR);
+  Serial.print(" Rain: "); Serial.print(rainMode);
+  Serial.print(" PIR: "); Serial.println(motion);
+
+  delay(50);
+}
